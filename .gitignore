@@ -2,7 +2,6 @@
 *.dll
 *.so
 *.dylib
-app-developer
 
 # Output of go coverage
 *.out
