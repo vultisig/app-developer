@@ -97,7 +97,7 @@ func main() {
 		vaultStorage,
 		asynqClient,
 		asynqInspector,
-		spec.NewSpec(),
+		spec.NewSpec(cfg.Fee.VultTokenAddress, cfg.Fee.TreasuryAddress, cfg.Fee.FeeAmount),
 		middlewares,
 		smetrics.NewNilPluginServerMetrics(),
 		logger,

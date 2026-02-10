@@ -13,10 +13,17 @@ import (
 
 type Spec struct {
 	plugin.Unimplemented
+	VultTokenAddress string
+	TreasuryAddress  string
+	FeeAmount        string
 }
 
-func NewSpec() *Spec {
-	return &Spec{}
+func NewSpec(vultTokenAddress, treasuryAddress, feeAmount string) *Spec {
+	return &Spec{
+		VultTokenAddress: vultTokenAddress,
+		TreasuryAddress:  treasuryAddress,
+		FeeAmount:        feeAmount,
+	}
 }
 
 func (s *Spec) GetPluginID() string {
@@ -27,16 +34,43 @@ func (s *Spec) GetSkills() string {
 	return skillsMD
 }
 
+func (s *Spec) assetDefinitions() map[string]any {
+	return map[string]any{
+		"asset": map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"token": map[string]any{
+					"type": "string",
+					"enum": []any{s.VultTokenAddress},
+				},
+				"chain": map[string]any{
+					"type": "string",
+				},
+				"address": map[string]any{
+					"type": "string",
+				},
+			},
+			"required":             []any{"chain", "address"},
+			"additionalProperties": false,
+		},
+	}
+}
+
 func (s *Spec) GetRecipeSpecification() (*rtypes.RecipeSchema, error) {
 	cfg, err := plugin.RecipeConfiguration(map[string]any{
-		"type": "object",
+		"type":        "object",
+		"definitions": s.assetDefinitions(),
 		"properties": map[string]any{
-			"target_plugin_id": map[string]any{
+			"targetPluginId": map[string]any{
 				"type":        "string",
 				"description": "The plugin ID to pay listing fee for",
 			},
+			"asset": map[string]any{
+				"$ref":        "#/definitions/asset",
+				"description": "Source asset (chain, token, your address)",
+			},
 		},
-		"required": []any{"target_plugin_id"},
+		"required": []any{"targetPluginId", "asset"},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to build recipe config: %w", err)
@@ -76,17 +110,21 @@ func (s *Spec) ValidatePluginPolicy(pol types.PluginPolicy) error {
 	return plugin.ValidatePluginPolicy(pol, spec)
 }
 
-// Suggest returns policy constraints for a one-time listing fee payment.
-// The asset and amount constraints use FIXED type but values are left empty here
-// because the actual VULT token address and fee amount are server-side config.
-// The payment indexer enforces exact matching against those config values.
 func (s *Spec) Suggest(_ context.Context, cfg map[string]any) (*rtypes.PolicySuggest, error) {
-	_, ok := cfg["target_plugin_id"].(string)
+	_, ok := cfg["targetPluginId"].(string)
 	if !ok {
-		return nil, fmt.Errorf("'target_plugin_id' is required")
+		return nil, fmt.Errorf("'targetPluginId' is required")
 	}
 
-	fromAddress, _ := cfg["from_address"].(string)
+	assetMap, ok := cfg["asset"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("'asset' must be an object")
+	}
+
+	fromAddress, ok := assetMap["address"].(string)
+	if !ok || fromAddress == "" {
+		return nil, fmt.Errorf("'asset.address' could not be empty")
+	}
 
 	chainLowercase := strings.ToLower(SupportedChains[0].String())
 
@@ -94,7 +132,10 @@ func (s *Spec) Suggest(_ context.Context, cfg map[string]any) (*rtypes.PolicySug
 		{
 			ParameterName: "asset",
 			Constraint: &rtypes.Constraint{
-				Type:     rtypes.ConstraintType_CONSTRAINT_TYPE_FIXED,
+				Type: rtypes.ConstraintType_CONSTRAINT_TYPE_FIXED,
+				Value: &rtypes.Constraint_FixedValue{
+					FixedValue: s.VultTokenAddress,
+				},
 				Required: true,
 			},
 		},
@@ -111,14 +152,20 @@ func (s *Spec) Suggest(_ context.Context, cfg map[string]any) (*rtypes.PolicySug
 		{
 			ParameterName: "amount",
 			Constraint: &rtypes.Constraint{
-				Type:     rtypes.ConstraintType_CONSTRAINT_TYPE_FIXED,
+				Type: rtypes.ConstraintType_CONSTRAINT_TYPE_FIXED,
+				Value: &rtypes.Constraint_FixedValue{
+					FixedValue: s.FeeAmount,
+				},
 				Required: true,
 			},
 		},
 		{
 			ParameterName: "to_address",
 			Constraint: &rtypes.Constraint{
-				Type:     rtypes.ConstraintType_CONSTRAINT_TYPE_MAGIC_CONSTANT,
+				Type: rtypes.ConstraintType_CONSTRAINT_TYPE_FIXED,
+				Value: &rtypes.Constraint_FixedValue{
+					FixedValue: s.TreasuryAddress,
+				},
 				Required: true,
 			},
 		},

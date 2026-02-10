@@ -179,7 +179,7 @@ func ReadTxIndexerConfig() (*TxIndexerConfig, error) {
 func setFeeDefaults() {
 	viper.SetDefault("fee.vult_token_address", "0xb788144DF611029C60b859DF47e79B7726C4DEBa")
 	viper.SetDefault("fee.treasury_address", "0x0000000000000000000000000000000000000000")
-	viper.SetDefault("fee.fee_amount", "5000000000000000000")
+	viper.SetDefault("fee.fee_amount", "1000000000000000000")
 	viper.SetDefault("fee.eth_rpc_url", "https://ethereum-rpc.publicnode.com")
 	viper.SetDefault("fee.chain_id", 1)
 }

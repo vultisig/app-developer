@@ -169,9 +169,9 @@ func (a *DeveloperAPI) lazyCreateListingFee(c echo.Context, policyID uuid.UUID) 
 	}
 
 	cfgMap := recipe.GetConfiguration().AsMap()
-	targetPluginID, ok := cfgMap["target_plugin_id"].(string)
+	targetPluginID, ok := cfgMap["targetPluginId"].(string)
 	if !ok || targetPluginID == "" {
-		return nil, c.JSON(http.StatusBadRequest, map[string]string{"error": "missing target_plugin_id in configuration"})
+		return nil, c.JSON(http.StatusBadRequest, map[string]string{"error": "missing targetPluginId in configuration"})
 	}
 
 	existing, err := a.db.GetPendingListingFeeByScope(ctx, pol.PublicKey, targetPluginID)
