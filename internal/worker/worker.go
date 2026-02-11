@@ -150,6 +150,9 @@ func (c *Consumer) syncSubmittedFees(ctx context.Context) {
 	}
 }
 
+// deactivatePaidPolicies marks policies as inactive once their listing fee is paid.
+// This also prevents charging a user twice: if a duplicate policy is created for the
+// same plugin, the paid policy is deactivated before the duplicate can be executed.
 func (c *Consumer) deactivatePaidPolicies(ctx context.Context) {
 	policyIDs, err := c.db.GetPaidActivePolicyIDs(ctx)
 	if err != nil {
