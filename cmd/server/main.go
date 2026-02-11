@@ -109,7 +109,7 @@ func main() {
 
 	e := srv.GetRouter()
 
-	listingAPI := appserver.NewDeveloperAPI(policyService, pgBackend, cfg.Fee, asynqClient, logger)
+	listingAPI := appserver.NewDeveloperAPI(pgBackend, cfg.Fee, logger)
 	listingAPI.RegisterRoutes(e)
 
 	go func() {

@@ -30,13 +30,8 @@ type WorkerConfig struct {
 	Verifier           config.Verifier           `mapstructure:"verifier" json:"verifier,omitempty"`
 	Fee                FeeConfig                 `mapstructure:"fee" json:"fee,omitempty"`
 	TaskQueueName      string                    `mapstructure:"task_queue_name" json:"task_queue_name,omitempty"`
+	ProcessingInterval time.Duration             `mapstructure:"processing_interval" json:"processing_interval,omitempty"`
 	HealthPort         int                       `mapstructure:"health_port" json:"health_port,omitempty"`
-}
-
-type SyncerConfig struct {
-	Database       config.Database `mapstructure:"database" json:"database,omitempty"`
-	SyncerInterval time.Duration   `mapstructure:"syncer_interval" json:"syncer_interval,omitempty"`
-	HealthPort     int             `mapstructure:"health_port" json:"health_port,omitempty"`
 }
 
 type TxIndexerConfig struct {
@@ -99,6 +94,7 @@ func ReadWorkerConfig() (*WorkerConfig, error) {
 	viper.AutomaticEnv()
 
 	viper.SetDefault("health_port", 8081)
+	viper.SetDefault("processing_interval", "30s")
 	setFeeDefaults()
 
 	err := viper.ReadInConfig()
@@ -108,35 +104,6 @@ func ReadWorkerConfig() (*WorkerConfig, error) {
 		}
 	}
 	var cfg WorkerConfig
-	err = viper.Unmarshal(&cfg)
-	if err != nil {
-		return nil, fmt.Errorf("unable to decode into struct, %w", err)
-	}
-	return &cfg, nil
-}
-
-func ReadSyncerConfig() (*SyncerConfig, error) {
-	configName := os.Getenv("VS_CONFIG_NAME")
-	if configName == "" {
-		configName = "config"
-	}
-
-	addKeysToViper(viper.GetViper(), reflect.TypeOf(SyncerConfig{}))
-	viper.SetConfigName(configName)
-	viper.AddConfigPath(".")
-	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
-	viper.AutomaticEnv()
-
-	viper.SetDefault("syncer_interval", "30s")
-	viper.SetDefault("health_port", 8082)
-
-	err := viper.ReadInConfig()
-	if err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
-			return nil, fmt.Errorf("fail to reading config file, %w", err)
-		}
-	}
-	var cfg SyncerConfig
 	err = viper.Unmarshal(&cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to decode into struct, %w", err)
@@ -178,7 +145,7 @@ func ReadTxIndexerConfig() (*TxIndexerConfig, error) {
 
 func setFeeDefaults() {
 	viper.SetDefault("fee.vult_token_address", "0xb788144DF611029C60b859DF47e79B7726C4DEBa")
-	viper.SetDefault("fee.treasury_address", "0x0000000000000000000000000000000000000000")
+	viper.SetDefault("fee.treasury_address", "")
 	viper.SetDefault("fee.fee_amount", "1000000000000000000")
 	viper.SetDefault("fee.eth_rpc_url", "https://ethereum-rpc.publicnode.com")
 	viper.SetDefault("fee.chain_id", 1)

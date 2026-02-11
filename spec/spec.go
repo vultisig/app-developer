@@ -40,11 +40,14 @@ func (s *Spec) assetDefinitions() map[string]any {
 			"type": "object",
 			"properties": map[string]any{
 				"token": map[string]any{
-					"type": "string",
-					"enum": []any{s.VultTokenAddress},
+					"type":    "string",
+					"enum":    []any{s.VultTokenAddress},
+					"default": s.VultTokenAddress,
 				},
 				"chain": map[string]any{
-					"type": "string",
+					"type":    "string",
+					"enum":    toAnySlice(getSupportedChainStrings()),
+					"default": SupportedChains[0].String(),
 				},
 				"address": map[string]any{
 					"type": "string",
@@ -68,6 +71,16 @@ func (s *Spec) GetRecipeSpecification() (*rtypes.RecipeSchema, error) {
 			"asset": map[string]any{
 				"$ref":        "#/definitions/asset",
 				"description": "Source asset (chain, token, your address)",
+			},
+			"feeAmount": map[string]any{
+				"type":     "string",
+				"default":  s.FeeAmount,
+				"readOnly": true,
+			},
+			"frequency": map[string]any{
+				"type":     "string",
+				"default":  "one-time",
+				"readOnly": true,
 			},
 		},
 		"required": []any{"targetPluginId", "asset"},
@@ -218,7 +231,7 @@ func (s *Spec) buildSupportedResources() []*rtypes.ResourcePattern {
 				},
 				{
 					ParameterName:  "to_address",
-					SupportedTypes: rtypes.ConstraintType_CONSTRAINT_TYPE_MAGIC_CONSTANT,
+					SupportedTypes: rtypes.ConstraintType_CONSTRAINT_TYPE_FIXED,
 					Required:       true,
 				},
 			},

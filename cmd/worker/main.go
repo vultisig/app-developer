@@ -179,8 +179,9 @@ func main() {
 		}
 	}()
 
+	go consumer.Run(ctx, cfg.ProcessingInterval)
+
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(tasks.TypePluginTransaction, consumer.HandleExecuteListingFee)
 	mux.HandleFunc(tasks.TypeKeySignDKLS, vaultService.HandleKeySignDKLS)
 	mux.HandleFunc(tasks.TypeReshareDKLS, vaultService.HandleReshareDKLS)
 

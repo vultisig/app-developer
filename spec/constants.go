@@ -15,3 +15,11 @@ func getSupportedChainStrings() []string {
 	}
 	return cc
 }
+
+func toAnySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
+}

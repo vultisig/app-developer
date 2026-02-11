@@ -2,13 +2,12 @@ package worker
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
+	"math/big"
 	"time"
 
 	ecommon "github.com/ethereum/go-ethereum/common"
 	"github.com/google/uuid"
-	"github.com/hibiken/asynq"
 	"github.com/sirupsen/logrus"
 	"github.com/vultisig/app-developer/internal/config"
 	"github.com/vultisig/app-developer/internal/db"
@@ -54,33 +53,137 @@ func NewConsumer(
 	}
 }
 
-type executePayload struct {
-	PolicyID uuid.UUID `json:"policy_id"`
+func (c *Consumer) Run(ctx context.Context, interval time.Duration) {
+	if interval == 0 {
+		interval = 30 * time.Second
+	}
+	c.logger.WithField("interval", interval).Info("listing fee processor started")
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			c.process(ctx)
+		case <-ctx.Done():
+			c.logger.Info("listing fee processor stopped")
+			return
+		}
+	}
 }
 
-func (c *Consumer) HandleExecuteListingFee(_ context.Context, t *asynq.Task) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+func (c *Consumer) process(ctx context.Context) {
+	c.createListingFeesForNewPolicies(ctx)
+	c.executePendingFees(ctx)
+	c.syncSubmittedFees(ctx)
+	c.deactivatePaidPolicies(ctx)
+}
 
-	var payload executePayload
-	err := json.Unmarshal(t.Payload(), &payload)
+func (c *Consumer) createListingFeesForNewPolicies(ctx context.Context) {
+	policyIDs, err := c.db.GetUnprocessedPolicyIDs(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to unmarshal payload: %w", err)
+		c.logger.WithError(err).Error("failed to get unprocessed policies")
+		return
 	}
 
-	c.logger.WithField("policy_id", payload.PolicyID).Info("executing listing fee payment")
-
-	err = c.execute(ctx, payload.PolicyID)
-	if err != nil {
-		c.logger.WithError(err).WithField("policy_id", payload.PolicyID).Error("failed to execute listing fee")
-		markErr := c.db.MarkAsFailed(ctx, payload.PolicyID, err.Error())
-		if markErr != nil {
-			c.logger.WithError(markErr).Error("failed to mark listing fee as failed")
+	for _, policyID := range policyIDs {
+		err = c.createListingFee(ctx, policyID)
+		if err != nil {
+			c.logger.WithError(err).WithField("policy_id", policyID).Error("failed to create listing fee")
 		}
-		return asynq.SkipRetry
 	}
+}
+
+func (c *Consumer) createListingFee(ctx context.Context, policyID uuid.UUID) error {
+	pol, err := c.policySvc.GetPluginPolicy(ctx, policyID)
+	if err != nil {
+		return fmt.Errorf("failed to get policy: %w", err)
+	}
+
+	recipe, err := pol.GetRecipe()
+	if err != nil {
+		return fmt.Errorf("failed to get recipe: %w", err)
+	}
+
+	cfgMap := recipe.GetConfiguration().AsMap()
+	targetPluginID, ok := cfgMap["targetPluginId"].(string)
+	if !ok || targetPluginID == "" {
+		return fmt.Errorf("missing targetPluginId in configuration")
+	}
+
+	amount := new(big.Int)
+	amount.SetString(c.feeConfig.FeeAmount, 10)
+
+	fee := db.ListingFee{
+		PolicyID:       policyID,
+		PublicKey:      pol.PublicKey,
+		TargetPluginID: targetPluginID,
+		Amount:         amount,
+		Destination:    c.feeConfig.TreasuryAddress,
+		Status:         "pending",
+	}
+
+	err = c.db.CreateListingFee(ctx, fee)
+	if err != nil {
+		return fmt.Errorf("failed to create listing fee: %w", err)
+	}
+
+	c.logger.WithFields(logrus.Fields{
+		"policy_id":        policyID,
+		"target_plugin_id": targetPluginID,
+	}).Info("listing fee created")
 
 	return nil
+}
+
+func (c *Consumer) syncSubmittedFees(ctx context.Context) {
+	paid, failed, err := c.db.SyncSubmittedFees(ctx)
+	if err != nil {
+		c.logger.WithError(err).Error("failed to sync submitted fees")
+		return
+	}
+	if paid > 0 || failed > 0 {
+		c.logger.WithFields(logrus.Fields{
+			"paid":   paid,
+			"failed": failed,
+		}).Info("synced submitted fees from tx_indexer")
+	}
+}
+
+func (c *Consumer) deactivatePaidPolicies(ctx context.Context) {
+	policyIDs, err := c.db.GetPaidActivePolicyIDs(ctx)
+	if err != nil {
+		c.logger.WithError(err).Error("failed to get paid active policies")
+		return
+	}
+
+	for _, policyID := range policyIDs {
+		err = c.db.DeactivatePolicy(ctx, policyID, "completed")
+		if err != nil {
+			c.logger.WithError(err).WithField("policy_id", policyID).Error("failed to deactivate policy")
+			continue
+		}
+		c.logger.WithField("policy_id", policyID).Info("policy deactivated (listing fee paid)")
+	}
+}
+
+func (c *Consumer) executePendingFees(ctx context.Context) {
+	fees, err := c.db.GetPendingListingFees(ctx)
+	if err != nil {
+		c.logger.WithError(err).Error("failed to get pending listing fees")
+		return
+	}
+
+	for _, fee := range fees {
+		executeErr := c.execute(ctx, fee.PolicyID)
+		if executeErr != nil {
+			c.logger.WithError(executeErr).WithField("policy_id", fee.PolicyID).Error("failed to execute listing fee")
+			markErr := c.db.MarkAsFailed(ctx, fee.PolicyID, executeErr.Error())
+			if markErr != nil {
+				c.logger.WithError(markErr).Error("failed to mark listing fee as failed")
+			}
+		}
+	}
 }
 
 func (c *Consumer) execute(ctx context.Context, policyID uuid.UUID) error {

@@ -165,6 +165,120 @@ func (p *PostgresBackend) MarkAsFailed(ctx context.Context, policyID uuid.UUID, 
 	return nil
 }
 
+func (p *PostgresBackend) DeactivatePolicy(ctx context.Context, policyID uuid.UUID, reason string) error {
+	query := `
+		UPDATE plugin_policies
+		SET active = false, deactivation_reason = $2
+		WHERE id = $1 AND active = true`
+
+	_, err := p.pool.Exec(ctx, query, policyID, reason)
+	if err != nil {
+		return fmt.Errorf("failed to deactivate policy: %w", err)
+	}
+	return nil
+}
+
+func (p *PostgresBackend) GetPaidActivePolicyIDs(ctx context.Context) ([]uuid.UUID, error) {
+	query := `
+		SELECT lf.policy_id
+		FROM listing_fees lf
+		JOIN plugin_policies pp ON pp.id = lf.policy_id
+		WHERE lf.status = 'paid'
+		  AND pp.active = true`
+
+	rows, err := p.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query paid active policies: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		scanErr := rows.Scan(&id)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan policy id: %w", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (p *PostgresBackend) HasActiveListingFee(ctx context.Context, publicKey, targetPluginID string) (bool, error) {
+	query := `
+		SELECT EXISTS(
+			SELECT 1 FROM listing_fees
+			WHERE public_key = $1
+			  AND target_plugin_id = $2
+			  AND status IN ('pending', 'submitted', 'paid')
+		)`
+
+	var exists bool
+	err := p.pool.QueryRow(ctx, query, publicKey, targetPluginID).Scan(&exists)
+	if err != nil {
+		return false, fmt.Errorf("failed to check active listing fee: %w", err)
+	}
+	return exists, nil
+}
+
+func (p *PostgresBackend) GetUnprocessedPolicyIDs(ctx context.Context) ([]uuid.UUID, error) {
+	query := `
+		SELECT pp.id
+		FROM plugin_policies pp
+		LEFT JOIN listing_fees lf ON lf.policy_id = pp.id
+		WHERE pp.active = true
+		  AND lf.id IS NULL`
+
+	rows, err := p.pool.Query(ctx, query)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query unprocessed policies: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		scanErr := rows.Scan(&id)
+		if scanErr != nil {
+			return nil, fmt.Errorf("failed to scan policy id: %w", scanErr)
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (p *PostgresBackend) SyncSubmittedFees(ctx context.Context) (paid int64, failed int64, err error) {
+	paidQuery := `
+		UPDATE listing_fees lf
+		SET status = 'paid', paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+		FROM tx_indexer ti
+		WHERE ti.policy_id = lf.policy_id
+		  AND lf.status = 'submitted'
+		  AND ti.status_onchain = 'SUCCESS'`
+
+	paidResult, err := p.pool.Exec(ctx, paidQuery)
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to sync paid fees: %w", err)
+	}
+
+	failedQuery := `
+		UPDATE listing_fees lf
+		SET status = 'failed',
+		    failure_reason = CASE WHEN ti.lost THEN 'transaction lost' ELSE 'transaction failed on-chain' END,
+		    updated_at = CURRENT_TIMESTAMP
+		FROM tx_indexer ti
+		WHERE ti.policy_id = lf.policy_id
+		  AND lf.status = 'submitted'
+		  AND (ti.status_onchain = 'FAIL' OR ti.lost = true)`
+
+	failedResult, err := p.pool.Exec(ctx, failedQuery)
+	if err != nil {
+		return paidResult.RowsAffected(), 0, fmt.Errorf("failed to sync failed fees: %w", err)
+	}
+
+	return paidResult.RowsAffected(), failedResult.RowsAffected(), nil
+}
+
 func (p *PostgresBackend) UpdateConfirmations(ctx context.Context, policyID uuid.UUID, confirmations int) error {
 	query := `
 		UPDATE listing_fees
