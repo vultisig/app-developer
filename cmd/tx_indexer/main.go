@@ -2,28 +2,50 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/sirupsen/logrus"
 
 	"github.com/vultisig/verifier/plugin"
-	"github.com/vultisig/verifier/plugin/metrics"
+	plugin_config "github.com/vultisig/verifier/plugin/config"
+	plugin_metrics "github.com/vultisig/verifier/plugin/metrics"
 	"github.com/vultisig/verifier/plugin/tx_indexer"
-	txconfig "github.com/vultisig/verifier/plugin/tx_indexer/pkg/config"
-	txstorage "github.com/vultisig/verifier/plugin/tx_indexer/pkg/storage"
+	tx_config "github.com/vultisig/verifier/plugin/tx_indexer/pkg/config"
+	tx_storage "github.com/vultisig/verifier/plugin/tx_indexer/pkg/storage"
 
-	"github.com/vultisig/app-developer/internal/config"
 	"github.com/vultisig/app-developer/internal/health"
 )
+
+type config struct {
+	Database         plugin_config.Database
+	EthRpcURL        string        `envconfig:"ETH_RPC_URL" default:"https://ethereum-rpc.publicnode.com"`
+	Interval         time.Duration `default:"15s"`
+	IterationTimeout time.Duration `default:"60s"`
+	MarkLostAfter    time.Duration `default:"30m"`
+	Concurrency      int           `default:"5"`
+	HealthPort       int           `default:"8083"`
+}
+
+func newConfig() (config, error) {
+	var cfg config
+	err := envconfig.Process("", &cfg)
+	if err != nil {
+		return config{}, fmt.Errorf("failed to process env var: %w", err)
+	}
+	return cfg, nil
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg, err := config.ReadTxIndexerConfig()
+	cfg, err := newConfig()
 	if err != nil {
 		logrus.Fatalf("failed to load config: %v", err)
 	}
@@ -38,15 +60,15 @@ func main() {
 	txStorage, err := plugin.WithMigrations(
 		logger,
 		pgPool,
-		txstorage.NewRepo,
+		tx_storage.NewRepo,
 		"tx_indexer/pkg/storage/migrations",
 	)
 	if err != nil {
 		logger.Fatalf("failed to initialize tx_indexer storage: %v", err)
 	}
 
-	rpcCfg := txconfig.RpcConfig{
-		Ethereum: txconfig.RpcItem{URL: cfg.EthRpcURL},
+	rpcCfg := tx_config.RpcConfig{
+		Ethereum: tx_config.RpcItem{URL: cfg.EthRpcURL},
 	}
 
 	rpcs, err := tx_indexer.Rpcs(ctx, rpcCfg)
@@ -62,7 +84,7 @@ func main() {
 		cfg.Concurrency,
 		txStorage,
 		rpcs,
-		metrics.NewNilTxIndexerMetrics(),
+		plugin_metrics.NewNilTxIndexerMetrics(),
 	)
 
 	healthServer := health.New(cfg.HealthPort)

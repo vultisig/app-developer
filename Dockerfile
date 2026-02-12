@@ -12,6 +12,7 @@ RUN wget https://github.com/vultisig/go-wrappers/archive/refs/heads/master.tar.g
     if [ ! -d "includes/linux-${TARGETARCH}" ]; then echo "Error: includes/linux-${TARGETARCH} not found" && exit 1; fi && \
     cp -r includes/linux-${TARGETARCH} /usr/local/lib/dkls/includes/linux
 
+ARG SERVICE
 WORKDIR /app
 COPY go.mod go.sum ./
 RUN go mod download
@@ -21,8 +22,7 @@ ENV CGO_ENABLED=1
 ENV CC=clang
 ENV CGO_LDFLAGS=-fuse-ld=lld
 ENV LD_LIBRARY_PATH=/usr/local/lib/dkls/includes/linux:$LD_LIBRARY_PATH
-ARG SERVICE=server
-RUN go build -o main ./cmd/${SERVICE}/
+RUN go build -o main cmd/${SERVICE}/main.go
 
 FROM ubuntu:22.04
 

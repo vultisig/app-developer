@@ -2,42 +2,67 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"math/big"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/sirupsen/logrus"
 
+	evmsdk "github.com/vultisig/recipes/sdk/evm"
 	"github.com/vultisig/verifier/plugin"
+	plugin_config "github.com/vultisig/verifier/plugin/config"
 	"github.com/vultisig/verifier/plugin/keysign"
 	"github.com/vultisig/verifier/plugin/policy"
 	"github.com/vultisig/verifier/plugin/policy/policy_pg"
 	"github.com/vultisig/verifier/plugin/scheduler"
 	"github.com/vultisig/verifier/plugin/tasks"
 	"github.com/vultisig/verifier/plugin/tx_indexer"
-	txstorage "github.com/vultisig/verifier/plugin/tx_indexer/pkg/storage"
+	tx_storage "github.com/vultisig/verifier/plugin/tx_indexer/pkg/storage"
 	"github.com/vultisig/verifier/vault"
+	"github.com/vultisig/verifier/vault_config"
+	vcommon "github.com/vultisig/vultisig-go/common"
 	"github.com/vultisig/vultisig-go/relay"
 
-	evmsdk "github.com/vultisig/recipes/sdk/evm"
-	vcommon "github.com/vultisig/vultisig-go/common"
-
-	"github.com/vultisig/app-developer/internal/config"
+	app_config "github.com/vultisig/app-developer/internal/config"
 	"github.com/vultisig/app-developer/internal/db"
 	"github.com/vultisig/app-developer/internal/evm"
 	"github.com/vultisig/app-developer/internal/health"
 	"github.com/vultisig/app-developer/internal/worker"
 )
 
+type config struct {
+	Postgres           plugin_config.Database
+	Redis              plugin_config.Redis
+	BlockStorage       vault_config.BlockStorage
+	VaultService       vault_config.Config
+	Verifier           plugin_config.Verifier
+	Fee                app_config.FeeConfig
+	TaskQueueName      string        `envconfig:"TASK_QUEUE_NAME" default:"default_queue"`
+	ProcessingInterval time.Duration `default:"30s"`
+	HealthPort         int           `default:"8081"`
+}
+
+func newConfig() (config, error) {
+	var cfg config
+	err := envconfig.Process("", &cfg)
+	if err != nil {
+		return config{}, fmt.Errorf("failed to process env var: %w", err)
+	}
+	return cfg, nil
+}
+
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg, err := config.ReadWorkerConfig()
+	cfg, err := newConfig()
 	if err != nil {
 		logrus.Fatalf("failed to load config: %v", err)
 	}
@@ -72,7 +97,7 @@ func main() {
 		},
 	)
 
-	pgPool, err := pgxpool.New(ctx, cfg.Database.DSN)
+	pgPool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		logger.Fatalf("failed to initialize Postgres pool: %v", err)
 	}
@@ -80,7 +105,7 @@ func main() {
 	txIndexerStorage, err := plugin.WithMigrations(
 		logger,
 		pgPool,
-		txstorage.NewRepo,
+		tx_storage.NewRepo,
 		"tx_indexer/pkg/storage/migrations",
 	)
 	if err != nil {
@@ -95,7 +120,7 @@ func main() {
 	txIndexerService := tx_indexer.NewService(logger, txIndexerStorage, supportedChains)
 
 	vaultService, err := vault.NewManagementService(
-		cfg.VaultServiceConfig,
+		cfg.VaultService,
 		asynqClient,
 		vaultStorage,
 		txIndexerService,
@@ -139,13 +164,13 @@ func main() {
 
 	signer := keysign.NewSigner(
 		logger.WithField("pkg", "keysign.Signer").Logger,
-		relay.NewRelayClient(cfg.VaultServiceConfig.Relay.Server),
+		relay.NewRelayClient(cfg.VaultService.Relay.Server),
 		[]keysign.Emitter{
 			keysign.NewPluginEmitter(asynqClient, tasks.TypeKeySignDKLS, queueName),
 			keysign.NewVerifierEmitter(cfg.Verifier.URL, cfg.Verifier.Token),
 		},
 		[]string{
-			cfg.VaultServiceConfig.LocalPartyPrefix,
+			cfg.VaultService.LocalPartyPrefix,
 			cfg.Verifier.PartyPrefix,
 		},
 	)
@@ -159,7 +184,7 @@ func main() {
 		sdk,
 		pgBackend,
 		vaultStorage,
-		cfg.VaultServiceConfig.EncryptionSecret,
+		cfg.VaultService.EncryptionSecret,
 		cfg.Fee,
 	)
 

@@ -12,32 +12,60 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/kelseyhightower/envconfig"
 	"github.com/sirupsen/logrus"
 
 	"github.com/vultisig/verifier/plugin"
-	smetrics "github.com/vultisig/verifier/plugin/metrics"
+	plugin_config "github.com/vultisig/verifier/plugin/config"
+	plugin_metrics "github.com/vultisig/verifier/plugin/metrics"
 	"github.com/vultisig/verifier/plugin/policy"
 	"github.com/vultisig/verifier/plugin/policy/policy_pg"
 	"github.com/vultisig/verifier/plugin/redis"
 	"github.com/vultisig/verifier/plugin/scheduler"
-	pluginserver "github.com/vultisig/verifier/plugin/server"
+	plugin_server "github.com/vultisig/verifier/plugin/server"
 	"github.com/vultisig/verifier/vault"
+	"github.com/vultisig/verifier/vault_config"
 	"golang.org/x/sync/errgroup"
 
-	"github.com/vultisig/app-developer/internal/config"
+	app_config "github.com/vultisig/app-developer/internal/config"
 	"github.com/vultisig/app-developer/internal/db"
-	appserver "github.com/vultisig/app-developer/internal/server"
+	app_server "github.com/vultisig/app-developer/internal/server"
 	"github.com/vultisig/app-developer/spec"
 )
+
+type config struct {
+	Server        plugin_server.Config
+	TaskQueueName string `envconfig:"TASK_QUEUE_NAME" default:"default_queue"`
+	Postgres      plugin_config.Database
+	Redis         plugin_config.Redis
+	BlockStorage  vault_config.BlockStorage
+	Verifier      plugin_config.Verifier
+	Fee           app_config.FeeConfig
+}
+
+func newConfig() (config, error) {
+	var cfg config
+	err := envconfig.Process("", &cfg)
+	if err != nil {
+		return config{}, fmt.Errorf("failed to process env var: %w", err)
+	}
+	return cfg, nil
+}
 
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	cfg, err := config.ReadServerConfig()
+	cfg, err := newConfig()
 	if err != nil {
 		logrus.Fatalf("failed to load config: %v", err)
 	}
+
+	if cfg.Verifier.Token == "" {
+		logrus.Fatal("VERIFIER_TOKEN is required")
+	}
+
+	cfg.Server.TaskQueueName = cfg.TaskQueueName
 
 	logger := logrus.New()
 
@@ -59,7 +87,7 @@ func main() {
 		logger.Fatalf("failed to initialize vault storage: %v", err)
 	}
 
-	pgPool, err := pgxpool.New(ctx, cfg.Database.DSN)
+	pgPool, err := pgxpool.New(ctx, cfg.Postgres.DSN)
 	if err != nil {
 		logger.Fatalf("failed to initialize Postgres pool: %v", err)
 	}
@@ -88,28 +116,26 @@ func main() {
 		logger.Fatalf("failed to initialize database: %v", err)
 	}
 
-	middlewares := pluginserver.DefaultMiddlewares(logger)
+	middlewares := plugin_server.DefaultMiddlewares(logger)
 
-	srv := pluginserver.NewServer(
+	srv := plugin_server.NewServer(
 		cfg.Server,
 		policyService,
 		redisClient,
 		vaultStorage,
 		asynqClient,
 		asynqInspector,
-		spec.NewSpec(cfg.Fee.VultTokenAddress, cfg.Fee.TreasuryAddress, cfg.Fee.FeeAmount),
+		spec.NewSpec(cfg.Fee.VultTokenAddress, cfg.Fee.TreasuryAddress, cfg.Fee.Amount),
 		middlewares,
-		smetrics.NewNilPluginServerMetrics(),
+		plugin_metrics.NewNilPluginServerMetrics(),
 		logger,
 		nil,
 	)
-	if cfg.Verifier.Token != "" {
-		srv.SetAuthMiddleware(pluginserver.NewAuth(cfg.Verifier.Token).Middleware)
-	}
+	srv.SetAuthMiddleware(plugin_server.NewAuth(cfg.Verifier.Token).Middleware)
 
 	e := srv.GetRouter()
 
-	listingAPI := appserver.NewDeveloperAPI(pgBackend, cfg.Fee, logger)
+	listingAPI := app_server.NewDeveloperAPI(pgBackend, cfg.Fee, logger)
 	listingAPI.RegisterRoutes(e)
 
 	go func() {

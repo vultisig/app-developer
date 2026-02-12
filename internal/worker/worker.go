@@ -112,7 +112,7 @@ func (c *Consumer) createListingFee(ctx context.Context, policyID uuid.UUID) err
 	}
 
 	amount := new(big.Int)
-	amount.SetString(c.feeConfig.FeeAmount, 10)
+	amount.SetString(c.feeConfig.Amount, 10)
 
 	fee := db.ListingFee{
 		PolicyID:       policyID,

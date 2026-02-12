@@ -2,12 +2,15 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+
+	"github.com/vultisig/app-developer/internal/db/sqlcgen"
 )
 
 type ListingFee struct {
@@ -29,19 +32,14 @@ type ListingFee struct {
 }
 
 func (p *PostgresBackend) CreateListingFee(ctx context.Context, fee ListingFee) error {
-	query := `
-		INSERT INTO listing_fees (policy_id, public_key, target_plugin_id, amount, destination, status)
-		VALUES ($1, $2, $3, $4, $5, $6)
-		ON CONFLICT (policy_id) DO NOTHING`
-
-	_, err := p.pool.Exec(ctx, query,
-		fee.PolicyID,
-		fee.PublicKey,
-		fee.TargetPluginID,
-		fee.Amount.String(),
-		fee.Destination,
-		fee.Status,
-	)
+	err := p.queries.CreateListingFee(ctx, sqlcgen.CreateListingFeeParams{
+		PolicyID:       fee.PolicyID,
+		PublicKey:      fee.PublicKey,
+		TargetPluginID: fee.TargetPluginID,
+		Amount:         fee.Amount.String(),
+		Destination:    fee.Destination,
+		Status:         fee.Status,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create listing fee: %w", err)
 	}
@@ -49,90 +47,65 @@ func (p *PostgresBackend) CreateListingFee(ctx context.Context, fee ListingFee) 
 }
 
 func (p *PostgresBackend) GetListingFeeByPolicyID(ctx context.Context, policyID uuid.UUID) (*ListingFee, error) {
-	query := `
-		SELECT id, policy_id, public_key, target_plugin_id, amount, destination,
-		       tx_hash, block_number, confirmations, status,
-		       submitted_at, paid_at, failure_reason,
-		       created_at, updated_at
-		FROM listing_fees
-		WHERE policy_id = $1`
-
-	row := p.pool.QueryRow(ctx, query, policyID)
-	return scanListingFee(row)
+	row, err := p.queries.GetListingFeeByPolicyID(ctx, policyID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get listing fee: %w", err)
+	}
+	return toListingFee(row), nil
 }
 
 func (p *PostgresBackend) GetListingFeeByScope(ctx context.Context, publicKey, pluginID string) (*ListingFee, error) {
-	query := `
-		SELECT id, policy_id, public_key, target_plugin_id, amount, destination,
-		       tx_hash, block_number, confirmations, status,
-		       submitted_at, paid_at, failure_reason,
-		       created_at, updated_at
-		FROM listing_fees
-		WHERE public_key = $1 AND target_plugin_id = $2
-		ORDER BY created_at DESC
-		LIMIT 1`
-
-	row := p.pool.QueryRow(ctx, query, publicKey, pluginID)
-	return scanListingFee(row)
+	row, err := p.queries.GetListingFeeByScope(ctx, sqlcgen.GetListingFeeByScopeParams{
+		PublicKey:      publicKey,
+		TargetPluginID: pluginID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get listing fee by scope: %w", err)
+	}
+	return toListingFee(row), nil
 }
 
 func (p *PostgresBackend) GetPendingListingFeeByScope(ctx context.Context, publicKey, pluginID string) (*ListingFee, error) {
-	query := `
-		SELECT id, policy_id, public_key, target_plugin_id, amount, destination,
-		       tx_hash, block_number, confirmations, status,
-		       submitted_at, paid_at, failure_reason,
-		       created_at, updated_at
-		FROM listing_fees
-		WHERE public_key = $1 AND target_plugin_id = $2 AND status = 'pending'
-		LIMIT 1`
-
-	row := p.pool.QueryRow(ctx, query, publicKey, pluginID)
-	return scanListingFee(row)
+	row, err := p.queries.GetPendingListingFeeByScope(ctx, sqlcgen.GetPendingListingFeeByScopeParams{
+		PublicKey:      publicKey,
+		TargetPluginID: pluginID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("failed to get pending listing fee by scope: %w", err)
+	}
+	return toListingFee(row), nil
 }
 
 func (p *PostgresBackend) GetPendingListingFees(ctx context.Context) ([]ListingFee, error) {
-	query := `
-		SELECT id, policy_id, public_key, target_plugin_id, amount, destination,
-		       tx_hash, block_number, confirmations, status,
-		       submitted_at, paid_at, failure_reason,
-		       created_at, updated_at
-		FROM listing_fees
-		WHERE status = 'pending'`
-
-	rows, err := p.pool.Query(ctx, query)
+	rows, err := p.queries.GetPendingListingFees(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query pending listing fees: %w", err)
 	}
-	defer rows.Close()
-
-	return scanListingFees(rows)
+	return toListingFees(rows), nil
 }
 
 func (p *PostgresBackend) GetSubmittedListingFees(ctx context.Context) ([]ListingFee, error) {
-	query := `
-		SELECT id, policy_id, public_key, target_plugin_id, amount, destination,
-		       tx_hash, block_number, confirmations, status,
-		       submitted_at, paid_at, failure_reason,
-		       created_at, updated_at
-		FROM listing_fees
-		WHERE status = 'submitted'`
-
-	rows, err := p.pool.Query(ctx, query)
+	rows, err := p.queries.GetSubmittedListingFees(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query submitted listing fees: %w", err)
 	}
-	defer rows.Close()
-
-	return scanListingFees(rows)
+	return toListingFees(rows), nil
 }
 
 func (p *PostgresBackend) MarkAsSubmitted(ctx context.Context, policyID uuid.UUID, txHash string) error {
-	query := `
-		UPDATE listing_fees
-		SET status = 'submitted', tx_hash = $2, submitted_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE policy_id = $1 AND status = 'pending'`
-
-	_, err := p.pool.Exec(ctx, query, policyID, txHash)
+	err := p.queries.MarkAsSubmitted(ctx, sqlcgen.MarkAsSubmittedParams{
+		PolicyID: policyID,
+		TxHash:   &txHash,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to mark listing fee as submitted: %w", err)
 	}
@@ -140,12 +113,11 @@ func (p *PostgresBackend) MarkAsSubmitted(ctx context.Context, policyID uuid.UUI
 }
 
 func (p *PostgresBackend) MarkAsPaid(ctx context.Context, policyID uuid.UUID, blockNum int64, confirmations int) error {
-	query := `
-		UPDATE listing_fees
-		SET status = 'paid', block_number = $2, confirmations = $3, paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		WHERE policy_id = $1 AND status = 'submitted'`
-
-	_, err := p.pool.Exec(ctx, query, policyID, blockNum, confirmations)
+	err := p.queries.MarkAsPaid(ctx, sqlcgen.MarkAsPaidParams{
+		PolicyID:      policyID,
+		BlockNumber:   &blockNum,
+		Confirmations: int32(confirmations),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to mark listing fee as paid: %w", err)
 	}
@@ -153,12 +125,10 @@ func (p *PostgresBackend) MarkAsPaid(ctx context.Context, policyID uuid.UUID, bl
 }
 
 func (p *PostgresBackend) MarkAsFailed(ctx context.Context, policyID uuid.UUID, reason string) error {
-	query := `
-		UPDATE listing_fees
-		SET status = 'failed', failure_reason = $2, updated_at = CURRENT_TIMESTAMP
-		WHERE policy_id = $1 AND status IN ('pending', 'submitted')`
-
-	_, err := p.pool.Exec(ctx, query, policyID, reason)
+	err := p.queries.MarkAsFailed(ctx, sqlcgen.MarkAsFailedParams{
+		PolicyID:      policyID,
+		FailureReason: &reason,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to mark listing fee as failed: %w", err)
 	}
@@ -166,12 +136,10 @@ func (p *PostgresBackend) MarkAsFailed(ctx context.Context, policyID uuid.UUID, 
 }
 
 func (p *PostgresBackend) DeactivatePolicy(ctx context.Context, policyID uuid.UUID, reason string) error {
-	query := `
-		UPDATE plugin_policies
-		SET active = false, deactivation_reason = $2
-		WHERE id = $1 AND active = true`
-
-	_, err := p.pool.Exec(ctx, query, policyID, reason)
+	err := p.queries.DeactivatePolicy(ctx, sqlcgen.DeactivatePolicyParams{
+		ID:                 policyID,
+		DeactivationReason: &reason,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to deactivate policy: %w", err)
 	}
@@ -179,42 +147,18 @@ func (p *PostgresBackend) DeactivatePolicy(ctx context.Context, policyID uuid.UU
 }
 
 func (p *PostgresBackend) GetPaidActivePolicyIDs(ctx context.Context) ([]uuid.UUID, error) {
-	query := `
-		SELECT lf.policy_id
-		FROM listing_fees lf
-		JOIN plugin_policies pp ON pp.id = lf.policy_id
-		WHERE lf.status = 'paid'
-		  AND pp.active = true`
-
-	rows, err := p.pool.Query(ctx, query)
+	ids, err := p.queries.GetPaidActivePolicyIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query paid active policies: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		scanErr := rows.Scan(&id)
-		if scanErr != nil {
-			return nil, fmt.Errorf("failed to scan policy id: %w", scanErr)
-		}
-		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
 func (p *PostgresBackend) HasActiveListingFee(ctx context.Context, publicKey, targetPluginID string) (bool, error) {
-	query := `
-		SELECT EXISTS(
-			SELECT 1 FROM listing_fees
-			WHERE public_key = $1
-			  AND target_plugin_id = $2
-			  AND status IN ('pending', 'submitted', 'paid')
-		)`
-
-	var exists bool
-	err := p.pool.QueryRow(ctx, query, publicKey, targetPluginID).Scan(&exists)
+	exists, err := p.queries.HasActiveListingFee(ctx, sqlcgen.HasActiveListingFeeParams{
+		PublicKey:      publicKey,
+		TargetPluginID: targetPluginID,
+	})
 	if err != nil {
 		return false, fmt.Errorf("failed to check active listing fee: %w", err)
 	}
@@ -222,117 +166,64 @@ func (p *PostgresBackend) HasActiveListingFee(ctx context.Context, publicKey, ta
 }
 
 func (p *PostgresBackend) GetUnprocessedPolicyIDs(ctx context.Context) ([]uuid.UUID, error) {
-	query := `
-		SELECT pp.id
-		FROM plugin_policies pp
-		LEFT JOIN listing_fees lf ON lf.policy_id = pp.id
-		WHERE pp.active = true
-		  AND lf.id IS NULL`
-
-	rows, err := p.pool.Query(ctx, query)
+	ids, err := p.queries.GetUnprocessedPolicyIDs(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query unprocessed policies: %w", err)
-	}
-	defer rows.Close()
-
-	var ids []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		scanErr := rows.Scan(&id)
-		if scanErr != nil {
-			return nil, fmt.Errorf("failed to scan policy id: %w", scanErr)
-		}
-		ids = append(ids, id)
 	}
 	return ids, nil
 }
 
 func (p *PostgresBackend) SyncSubmittedFees(ctx context.Context) (paid int64, failed int64, err error) {
-	paidQuery := `
-		UPDATE listing_fees lf
-		SET status = 'paid', paid_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
-		FROM tx_indexer ti
-		WHERE ti.policy_id = lf.policy_id
-		  AND lf.status = 'submitted'
-		  AND ti.status_onchain = 'SUCCESS'`
-
-	paidResult, err := p.pool.Exec(ctx, paidQuery)
+	paid, err = p.queries.SyncPaidFees(ctx)
 	if err != nil {
 		return 0, 0, fmt.Errorf("failed to sync paid fees: %w", err)
 	}
 
-	failedQuery := `
-		UPDATE listing_fees lf
-		SET status = 'failed',
-		    failure_reason = CASE WHEN ti.lost THEN 'transaction lost' ELSE 'transaction failed on-chain' END,
-		    updated_at = CURRENT_TIMESTAMP
-		FROM tx_indexer ti
-		WHERE ti.policy_id = lf.policy_id
-		  AND lf.status = 'submitted'
-		  AND (ti.status_onchain = 'FAIL' OR ti.lost = true)`
-
-	failedResult, err := p.pool.Exec(ctx, failedQuery)
+	failed, err = p.queries.SyncFailedFees(ctx)
 	if err != nil {
-		return paidResult.RowsAffected(), 0, fmt.Errorf("failed to sync failed fees: %w", err)
+		return paid, 0, fmt.Errorf("failed to sync failed fees: %w", err)
 	}
 
-	return paidResult.RowsAffected(), failedResult.RowsAffected(), nil
+	return paid, failed, nil
 }
 
 func (p *PostgresBackend) UpdateConfirmations(ctx context.Context, policyID uuid.UUID, confirmations int) error {
-	query := `
-		UPDATE listing_fees
-		SET confirmations = $2, updated_at = CURRENT_TIMESTAMP
-		WHERE policy_id = $1`
-
-	_, err := p.pool.Exec(ctx, query, policyID, confirmations)
+	err := p.queries.UpdateConfirmations(ctx, sqlcgen.UpdateConfirmationsParams{
+		PolicyID:      policyID,
+		Confirmations: int32(confirmations),
+	})
 	if err != nil {
 		return fmt.Errorf("failed to update confirmations: %w", err)
 	}
 	return nil
 }
 
-func scanListingFee(row pgx.Row) (*ListingFee, error) {
-	var f ListingFee
-	var amountStr string
-	err := row.Scan(
-		&f.ID, &f.PolicyID, &f.PublicKey, &f.TargetPluginID,
-		&amountStr, &f.Destination,
-		&f.TxHash, &f.BlockNumber, &f.Confirmations,
-		&f.Status,
-		&f.SubmittedAt, &f.PaidAt, &f.FailureReason,
-		&f.CreatedAt, &f.UpdatedAt,
-	)
-	if err == pgx.ErrNoRows {
-		return nil, nil
+func toListingFee(row sqlcgen.ListingFee) *ListingFee {
+	amount := new(big.Int)
+	amount.SetString(row.Amount, 10)
+	return &ListingFee{
+		ID:             row.ID,
+		PolicyID:       row.PolicyID,
+		PublicKey:      row.PublicKey,
+		TargetPluginID: row.TargetPluginID,
+		Amount:         amount,
+		Destination:    row.Destination,
+		TxHash:         row.TxHash,
+		BlockNumber:    row.BlockNumber,
+		Confirmations:  int(row.Confirmations),
+		Status:         row.Status,
+		SubmittedAt:    row.SubmittedAt,
+		PaidAt:         row.PaidAt,
+		FailureReason:  row.FailureReason,
+		CreatedAt:      row.CreatedAt,
+		UpdatedAt:      row.UpdatedAt,
 	}
-	if err != nil {
-		return nil, fmt.Errorf("failed to scan listing fee: %w", err)
-	}
-	f.Amount = new(big.Int)
-	f.Amount.SetString(amountStr, 10)
-	return &f, nil
 }
 
-func scanListingFees(rows pgx.Rows) ([]ListingFee, error) {
-	var fees []ListingFee
-	for rows.Next() {
-		var f ListingFee
-		var amountStr string
-		err := rows.Scan(
-			&f.ID, &f.PolicyID, &f.PublicKey, &f.TargetPluginID,
-			&amountStr, &f.Destination,
-			&f.TxHash, &f.BlockNumber, &f.Confirmations,
-			&f.Status,
-			&f.SubmittedAt, &f.PaidAt, &f.FailureReason,
-			&f.CreatedAt, &f.UpdatedAt,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("failed to scan listing fee: %w", err)
-		}
-		f.Amount = new(big.Int)
-		f.Amount.SetString(amountStr, 10)
-		fees = append(fees, f)
+func toListingFees(rows []sqlcgen.ListingFee) []ListingFee {
+	fees := make([]ListingFee, len(rows))
+	for i, row := range rows {
+		fees[i] = *toListingFee(row)
 	}
-	return fees, nil
+	return fees
 }

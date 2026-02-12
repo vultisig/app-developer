@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tx-indexer
+  labels:
+    app: tx-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tx-indexer
+  template:
+    metadata:
+      labels:
+        app: tx-indexer
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8088"
+        prometheus.io/path: "/metrics"
+    spec:
+      imagePullSecrets:
+        - name: ghcr
+      containers:
+        - name: tx-indexer
+          image: busybox
+          command: ["/app/main"]
+          ports:
+            - containerPort: 80
+              name: health
+            - containerPort: 8088
+              name: metrics
+          env:
+            - name: HEALTHPORT
+              value: "80"
+            - name: DATABASE_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: postgres
+                  key: dsn
+            - name: ETH_RPC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: rpc
+                  key: ethereum
+            - name: INTERVAL
+              value: "30s"
+            - name: ITERATIONTIMEOUT
+              value: "30s"
+            - name: MARKLOSTAFTER
+              value: "2h"
+            - name: CONCURRENCY
+              value: "5"
+            - name: METRICS_ENABLED
+              value: "true"
+            - name: METRICS_PORT
+              value: "8088"
+            - name: LOGFORMAT
+              value: "json"
+          resources:
+            requests:
+              memory: "32Mi"
+              cpu: "50m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 80
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 80

@@ -1,0 +1,32 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "internal/db/queries/"
+    schema: "internal/db/schema/"
+    gen:
+      go:
+        package: "sqlcgen"
+        out: "internal/db/sqlcgen"
+        sql_package: "pgx/v5"
+        emit_pointers_for_null_types: true
+        overrides:
+          - db_type: "uuid"
+            go_type:
+              import: "github.com/google/uuid"
+              type: "UUID"
+          - db_type: "pg_catalog.timestamp"
+            go_type:
+              import: "time"
+              type: "Time"
+          - column: "listing_fees.amount"
+            go_type: "string"
+          - column: "listing_fees.submitted_at"
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
+          - column: "listing_fees.paid_at"
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true

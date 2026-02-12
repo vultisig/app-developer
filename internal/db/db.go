@@ -8,13 +8,15 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 	"github.com/sirupsen/logrus"
+
+	"github.com/vultisig/app-developer/internal/db/sqlcgen"
 )
 
 //go:embed migrations/developer/*.sql
 var developerMigrations embed.FS
 
 type PostgresBackend struct {
-	pool *pgxpool.Pool
+	queries *sqlcgen.Queries
 }
 
 func NewPostgresBackend(logger *logrus.Logger, pool *pgxpool.Pool) (*PostgresBackend, error) {
@@ -25,7 +27,7 @@ func NewPostgresBackend(logger *logrus.Logger, pool *pgxpool.Pool) (*PostgresBac
 	}
 	logger.Info("developer database migrations completed")
 
-	return &PostgresBackend{pool: pool}, nil
+	return &PostgresBackend{queries: sqlcgen.New(pool)}, nil
 }
 
 type DeveloperMigrationManager struct {

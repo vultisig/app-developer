@@ -1,0 +1,6 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: rpc
+data:
+  ethereum: "https://api.vultisig.com/eth/"
