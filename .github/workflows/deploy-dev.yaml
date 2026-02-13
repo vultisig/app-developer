@@ -1,0 +1,86 @@
+name: Build and Deploy to Dev
+
+on:
+  push:
+    branches:
+      - dev
+    paths-ignore:
+      - '**.md'
+      - '.gitignore'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NS: plugin-developer
+
+jobs:
+  build-server:
+    uses: ./.github/workflows/build-push-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: server
+      registry: ghcr.io
+      image_name: ${{ github.repository }}
+      tag: dev-${{ github.sha }}
+      additional_tag: dev-latest
+
+  build-worker:
+    uses: ./.github/workflows/build-push-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: worker
+      registry: ghcr.io
+      image_name: ${{ github.repository }}
+      tag: dev-${{ github.sha }}
+      additional_tag: dev-latest
+
+  build-tx-indexer:
+    uses: ./.github/workflows/build-push-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: tx_indexer
+      registry: ghcr.io
+      image_name: ${{ github.repository }}
+      tag: dev-${{ github.sha }}
+      additional_tag: dev-latest
+
+  deploy:
+    needs: [build-server, build-worker, build-tx-indexer]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up kubeconfig
+        run: |
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBECONFIG_DEV }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Update deployment files
+        run: |
+          TAG="dev-${{ github.sha }}"
+
+          sed -i "s|image: busybox|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/server:${TAG}|" deploy/01_server.yaml
+          sed -i "s|image: busybox|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/worker:${TAG}|" deploy/01_worker.yaml
+          sed -i "s|image: busybox|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/tx_indexer:${TAG}|" deploy/01_tx_indexer.yaml
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl -n ${{ env.NS }} apply -f deploy/dev
+
+          kubectl -n ${{ env.NS }} apply -f deploy/01_server.yaml
+          kubectl -n ${{ env.NS }} apply -f deploy/01_worker.yaml
+          kubectl -n ${{ env.NS }} apply -f deploy/01_tx_indexer.yaml
+
+          kubectl -n ${{ env.NS }} rollout status deployment/server --timeout=300s
+          kubectl -n ${{ env.NS }} rollout status deployment/worker --timeout=300s
+          kubectl -n ${{ env.NS }} rollout status deployment/tx-indexer --timeout=300s

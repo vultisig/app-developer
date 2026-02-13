@@ -1,0 +1,95 @@
+name: Build and Push Images
+
+on:
+  release:
+    types: [published]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  NS: plugin-developer
+
+jobs:
+  build-server:
+    uses: ./.github/workflows/build-push-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: server
+      registry: ghcr.io
+      image_name: ${{ github.repository }}
+      tag: ${{ github.event.release.tag_name }}
+      additional_tag: latest
+
+  build-worker:
+    uses: ./.github/workflows/build-push-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: worker
+      registry: ghcr.io
+      image_name: ${{ github.repository }}
+      tag: ${{ github.event.release.tag_name }}
+      additional_tag: latest
+
+  build-tx-indexer:
+    uses: ./.github/workflows/build-push-image.yaml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      service: tx_indexer
+      registry: ghcr.io
+      image_name: ${{ github.repository }}
+      tag: ${{ github.event.release.tag_name }}
+      additional_tag: latest
+
+  set-public:
+    needs: [build-server, build-worker, build-tx-indexer]
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+    steps:
+      - name: Set GHCR packages public
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          owner="${{ github.repository_owner }}"
+          repo="${{ github.event.repository.name }}"
+          gh api -X PATCH "/orgs/${owner}/packages/container/${repo}%2Fserver/visibility" -f visibility=public || true
+          gh api -X PATCH "/orgs/${owner}/packages/container/${repo}%2Fworker/visibility" -f visibility=public || true
+          gh api -X PATCH "/orgs/${owner}/packages/container/${repo}%2Ftx_indexer/visibility" -f visibility=public || true
+
+  update-manifests:
+    needs: [build-server, build-worker, build-tx-indexer, set-public]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Update deployment files with new image tags
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+
+          sed -i "s|image: ghcr.io/${{ env.IMAGE_NAME }}/server:.*|image: ghcr.io/${{ env.IMAGE_NAME }}/server:${TAG}|" deploy/01_server.yaml
+          sed -i "s|image: busybox|image: ghcr.io/${{ env.IMAGE_NAME }}/server:${TAG}|" deploy/01_server.yaml
+
+          sed -i "s|image: ghcr.io/${{ env.IMAGE_NAME }}/worker:.*|image: ghcr.io/${{ env.IMAGE_NAME }}/worker:${TAG}|" deploy/01_worker.yaml
+          sed -i "s|image: busybox|image: ghcr.io/${{ env.IMAGE_NAME }}/worker:${TAG}|" deploy/01_worker.yaml
+
+          sed -i "s|image: ghcr.io/${{ env.IMAGE_NAME }}/tx_indexer:.*|image: ghcr.io/${{ env.IMAGE_NAME }}/tx_indexer:${TAG}|" deploy/01_tx_indexer.yaml
+          sed -i "s|image: busybox|image: ghcr.io/${{ env.IMAGE_NAME }}/tx_indexer:${TAG}|" deploy/01_tx_indexer.yaml
+
+      - name: Commit and push updated manifests
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add deploy/
+          git commit -m "chore: update image tags to ${{ github.event.release.tag_name }}" || echo "No changes to commit"
+          git push origin main
