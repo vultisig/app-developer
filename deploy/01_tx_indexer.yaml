@@ -18,8 +18,6 @@ spec:
         prometheus.io/port: "8088"
         prometheus.io/path: "/metrics"
     spec:
-      imagePullSecrets:
-        - name: ghcr
       containers:
         - name: tx-indexer
           image: busybox
