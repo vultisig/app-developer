@@ -110,3 +110,10 @@ WHERE ti.policy_id = lf.policy_id
 UPDATE listing_fees
 SET confirmations = $2, updated_at = CURRENT_TIMESTAMP
 WHERE policy_id = $1;
+
+-- name: IsListingFeePaidForPlugin :one
+SELECT EXISTS(
+    SELECT 1 FROM listing_fees
+    WHERE target_plugin_id = $1
+      AND status = 'paid'
+);
