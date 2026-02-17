@@ -32,6 +32,7 @@ func NewDeveloperAPI(
 func (a *DeveloperAPI) RegisterRoutes(e *echo.Echo) {
 	api := e.Group("/api")
 	api.GET("/listing-fee/by-scope", a.handleGetListingFeeByScope)
+	api.GET("/listing-fee/paid", a.handleIsListingFeePaid)
 }
 
 type listingFeeResponse struct {
@@ -86,4 +87,19 @@ func toListingFeeResponse(fee *db.ListingFee, feeConfig config.FeeConfig) listin
 		PaidAt:        fee.PaidAt,
 		FailureReason: fee.FailureReason,
 	}
+}
+
+func (a *DeveloperAPI) handleIsListingFeePaid(c echo.Context) error {
+	pluginID := c.QueryParam("pluginId")
+	if pluginID == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "pluginId is required"})
+	}
+
+	paid, err := a.db.IsListingFeePaidForPlugin(c.Request().Context(), pluginID)
+	if err != nil {
+		a.logger.WithError(err).Error("failed to check listing fee")
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "database error"})
+	}
+
+	return c.JSON(http.StatusOK, map[string]bool{"paid": paid})
 }
