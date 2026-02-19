@@ -165,6 +165,14 @@ func (p *PostgresBackend) HasActiveListingFee(ctx context.Context, publicKey, ta
 	return exists, nil
 }
 
+func (p *PostgresBackend) IsListingFeePaidForPlugin(ctx context.Context, pluginID string) (bool, error) {
+	paid, err := p.queries.IsListingFeePaidForPlugin(ctx, pluginID)
+	if err != nil {
+		return false, fmt.Errorf("failed to check listing fee paid: %w", err)
+	}
+	return paid, nil
+}
+
 func (p *PostgresBackend) GetUnprocessedPolicyIDs(ctx context.Context) ([]uuid.UUID, error) {
 	ids, err := p.queries.GetUnprocessedPolicyIDs(ctx)
 	if err != nil {

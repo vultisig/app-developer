@@ -330,6 +330,21 @@ func (q *Queries) HasActiveListingFee(ctx context.Context, arg HasActiveListingF
 	return exists, err
 }
 
+const isListingFeePaidForPlugin = `-- name: IsListingFeePaidForPlugin :one
+SELECT EXISTS(
+    SELECT 1 FROM listing_fees
+    WHERE target_plugin_id = $1
+      AND status = 'paid'
+)
+`
+
+func (q *Queries) IsListingFeePaidForPlugin(ctx context.Context, targetPluginID string) (bool, error) {
+	row := q.db.QueryRow(ctx, isListingFeePaidForPlugin, targetPluginID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const markAsFailed = `-- name: MarkAsFailed :exec
 UPDATE listing_fees
 SET status = 'failed', failure_reason = $2, updated_at = CURRENT_TIMESTAMP
