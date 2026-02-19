@@ -95,11 +95,10 @@ spec:
                 secretKeyRef:
                   name: verifier
                   key: token
-            # TODO: set actual values
             - name: FEE_TREASURY_ADDRESS
-              value: ""
+              value: "0x8E247a480449c84a5fDD25974A8501f3EFa4ABb9"
             - name: FEE_AMOUNT
-              value: ""
+              value: "10000000000000000000000"
             - name: FEE_ETH_RPC_URL
               valueFrom:
                 configMapKeyRef:

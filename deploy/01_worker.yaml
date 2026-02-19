@@ -96,11 +96,10 @@ spec:
                   key: uri
             - name: TASK_QUEUE_NAME
               value: "developer_plugin_queue"
-            # TODO: set actual values
             - name: FEE_TREASURY_ADDRESS
-              value: ""
+              value: "0x8E247a480449c84a5fDD25974A8501f3EFa4ABb9"
             - name: FEE_AMOUNT
-              value: ""
+              value: "10000000000000000000000"
             - name: FEE_ETH_RPC_URL
               valueFrom:
                 configMapKeyRef:
